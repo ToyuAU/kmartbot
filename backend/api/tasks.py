@@ -4,14 +4,29 @@ Actual execution is delegated to core.task_manager.
 """
 
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import List
 import aiosqlite
+from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.task import Task, TaskCreate, TaskUpdate, TaskLog, TaskStatus
+from backend.services.csv_utils import csv_text, parse_bool, parse_csv, split_pipe
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+class CsvImportBody(BaseModel):
+    csv: str
+
+
+def _resolve_unique(mapping: dict[str, list[str]], value: str, label: str, row_num: int) -> str:
+    matches = mapping.get(value.strip(), [])
+    if not matches:
+        raise HTTPException(400, f'Invalid task row {row_num}: unknown {label} "{value}"')
+    if len(matches) > 1:
+        raise HTTPException(400, f'Invalid task row {row_num}: ambiguous {label} "{value}"')
+    return matches[0]
 
 
 # ── Bulk controls (must be defined before /{task_id} routes) ─────────────────
@@ -35,6 +50,143 @@ async def stop_all_tasks():
     from backend.core.task_manager import task_manager
     await task_manager.stop_all()
     return {"ok": True}
+
+
+@router.get("/export")
+async def export_tasks_csv(db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute(
+        """SELECT t.*, p.name AS profile_name
+           FROM tasks t
+           LEFT JOIN profiles p ON p.id = t.profile_id
+           ORDER BY t.created_at DESC"""
+    ) as cur:
+        task_rows = await cur.fetchall()
+
+    async with db.execute("SELECT id, alias FROM cards") as cur:
+        card_rows = await cur.fetchall()
+    card_alias_by_id = {row["id"]: row["alias"] for row in card_rows}
+
+    fieldnames = [
+        "name", "site", "sku", "profile_id", "profile_name",
+        "card_ids", "card_aliases", "quantity",
+        "use_staff_codes", "use_flybuys", "watch_mode",
+    ]
+    export_rows: list[dict[str, object]] = []
+    for row in task_rows:
+        task = Task.from_row(row)
+        export_rows.append({
+            "name": task.name,
+            "site": task.site,
+            "sku": task.sku,
+            "profile_id": task.profile_id,
+            "profile_name": row["profile_name"] or "",
+            "card_ids": "|".join(task.card_ids),
+            "card_aliases": "|".join(
+                card_alias_by_id.get(card_id, "")
+                for card_id in task.card_ids
+                if card_alias_by_id.get(card_id)
+            ),
+            "quantity": task.quantity,
+            "use_staff_codes": str(task.use_staff_codes).lower(),
+            "use_flybuys": str(task.use_flybuys).lower(),
+            "watch_mode": str(task.watch_mode).lower(),
+        })
+
+    payload = csv_text(export_rows, fieldnames)
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="tasks.csv"'},
+    )
+
+
+@router.post("/import", status_code=201)
+async def import_tasks_csv(
+    body: CsvImportBody,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    rows = parse_csv(body.csv)
+
+    async with db.execute("SELECT id, name FROM profiles") as cur:
+        profile_rows = await cur.fetchall()
+    async with db.execute("SELECT id, alias FROM cards") as cur:
+        card_rows = await cur.fetchall()
+
+    profile_ids = {row["id"] for row in profile_rows}
+    card_ids = {row["id"] for row in card_rows}
+    profile_name_map: dict[str, list[str]] = {}
+    card_alias_map: dict[str, list[str]] = {}
+    for row in profile_rows:
+        profile_name_map.setdefault(row["name"], []).append(row["id"])
+    for row in card_rows:
+        card_alias_map.setdefault(row["alias"], []).append(row["id"])
+
+    imported = 0
+    for idx, row in enumerate(rows, start=2):
+        profile_id = row.get("profile_id", "")
+        profile_name = row.get("profile_name", "")
+        if profile_id:
+            if profile_id not in profile_ids:
+                raise HTTPException(400, f'Invalid task row {idx}: unknown profile_id "{profile_id}"')
+        elif profile_name:
+            profile_id = _resolve_unique(profile_name_map, profile_name, "profile_name", idx)
+        else:
+            raise HTTPException(400, f'Invalid task row {idx}: "profile_id" or "profile_name" is required')
+
+        resolved_card_ids: list[str] = []
+        explicit_card_ids = split_pipe(row.get("card_ids", ""))
+        if explicit_card_ids:
+            unknown = [card_id for card_id in explicit_card_ids if card_id not in card_ids]
+            if unknown:
+                raise HTTPException(400, f'Invalid task row {idx}: unknown card_ids {", ".join(unknown)}')
+            resolved_card_ids = explicit_card_ids
+        else:
+            for alias in split_pipe(row.get("card_aliases", "")):
+                resolved_card_ids.append(_resolve_unique(card_alias_map, alias, "card_alias", idx))
+
+        try:
+            quantity_raw = row.get("quantity", "")
+            task_in = TaskCreate(
+                name=row.get("name", ""),
+                site=row.get("site", "") or "kmart",
+                sku=row.get("sku", ""),
+                profile_id=profile_id,
+                card_ids=resolved_card_ids,
+                quantity=int(quantity_raw) if quantity_raw else 1,
+                use_staff_codes=parse_bool(row.get("use_staff_codes", ""), default=True),
+                use_flybuys=parse_bool(row.get("use_flybuys", ""), default=True),
+                watch_mode=parse_bool(row.get("watch_mode", ""), default=False),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, f"Invalid task row {idx}: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(400, f"Invalid task row {idx}: {exc}") from exc
+
+        if not task_in.sku:
+            raise HTTPException(400, f'Invalid task row {idx}: "sku" is required')
+        if task_in.quantity < 1:
+            raise HTTPException(400, f'Invalid task row {idx}: "quantity" must be at least 1')
+
+        now = Task.now()
+        task = Task(
+            id=Task.new_id(),
+            created_at=now,
+            updated_at=now,
+            **task_in.model_dump(),
+        )
+        await db.execute(
+            """INSERT INTO tasks
+               (id, name, site, sku, profile_id, card_ids, quantity,
+                use_staff_codes, use_flybuys, watch_mode, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (task.id, task.name, task.site, task.sku, task.profile_id,
+             json.dumps(task.card_ids), task.quantity,
+             int(task.use_staff_codes), int(task.use_flybuys), int(task.watch_mode),
+             task.status, task.created_at, task.updated_at),
+        )
+        imported += 1
+
+    return {"imported": imported}
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────

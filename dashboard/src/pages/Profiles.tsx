@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, MapPin, Mail, Phone } from 'lucide-react'
+import { Plus, Pencil, Trash2, MapPin, Mail, Phone, Download, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '../api/client'
 import type { Profile } from '../api/client'
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { downloadCsv } from '@/lib/csv'
 
 const AU_STATES = ['ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA']
 
@@ -121,6 +122,7 @@ function ProfileDialog({ profile, open, onOpenChange }: { profile?: Profile; ope
 export function Profiles() {
   const [editing, setEditing] = useState<Profile | undefined>()
   const [open, setOpen] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
 
   const { data: profiles = [], isLoading } = useQuery({ queryKey: ['profiles'], queryFn: api.profiles.list })
@@ -128,6 +130,22 @@ export function Profiles() {
     mutationFn: api.profiles.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['profiles'] }); toast.success('Profile deleted') },
     onError: (e: Error) => toast.error(`Delete failed: ${e.message}`),
+  })
+  const importMut = useMutation({
+    mutationFn: api.profiles.importCsv,
+    onSuccess: ({ imported }) => {
+      qc.invalidateQueries({ queryKey: ['profiles'] })
+      toast.success(`Imported ${imported} profile${imported === 1 ? '' : 's'}`)
+    },
+    onError: (e: Error) => toast.error(`Import failed: ${e.message}`),
+  })
+  const exportMut = useMutation({
+    mutationFn: api.profiles.exportCsv,
+    onSuccess: (csv) => {
+      downloadCsv('profiles.csv', csv)
+      toast.success('Profiles CSV exported')
+    },
+    onError: (e: Error) => toast.error(`Export failed: ${e.message}`),
   })
 
   function openNew() { setEditing(undefined); setOpen(true) }
@@ -138,13 +156,36 @@ export function Profiles() {
       cancel: { label: 'Cancel', onClick: () => {} },
     })
   }
+  async function handleImportChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    importMut.mutate(await file.text())
+  }
 
   return (
     <div className="flex-1 min-h-screen">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={handleImportChange}
+      />
       <PageHeader
         title="Profiles"
         description="Shipping & billing addresses used at checkout"
-        actions={<Button size="sm" onClick={openNew}><Plus className="size-3.5" /> New profile</Button>}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()} disabled={importMut.isPending}>
+              <Upload className="size-3.5" /> Import CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => exportMut.mutate()} disabled={exportMut.isPending}>
+              <Download className="size-3.5" /> Export CSV
+            </Button>
+            <Button size="sm" onClick={openNew}><Plus className="size-3.5" /> New profile</Button>
+          </>
+        }
       />
       <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
         {isLoading ? (

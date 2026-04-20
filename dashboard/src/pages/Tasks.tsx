@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Play, Square, Search, Inbox } from 'lucide-react'
+import { Plus, Play, Square, Search, Inbox, Download, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '../api/client'
 import type { Task } from '../api/client'
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { useStore } from '../store'
+import { downloadCsv } from '@/lib/csv'
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: 'default' | 'info' | 'success' | 'destructive' | 'muted' }) {
   const tones: Record<string, string> = {
@@ -33,6 +34,7 @@ export function Tasks() {
   const [editTask, setEditTask] = useState<Task | undefined>()
   const [formOpen, setFormOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const importInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
   const taskStates = useStore((s) => s.taskStates)
 
@@ -51,6 +53,22 @@ export function Tasks() {
     mutationFn: api.tasks.stopAll,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tasks'] }); toast.info('Stopping all running tasks') },
     onError: (e: Error) => toast.error(`Stop all failed: ${e.message}`),
+  })
+  const importMut = useMutation({
+    mutationFn: api.tasks.importCsv,
+    onSuccess: ({ imported }) => {
+      qc.invalidateQueries({ queryKey: ['tasks'] })
+      toast.success(`Imported ${imported} task${imported === 1 ? '' : 's'}`)
+    },
+    onError: (e: Error) => toast.error(`Import failed: ${e.message}`),
+  })
+  const exportMut = useMutation({
+    mutationFn: api.tasks.exportCsv,
+    onSuccess: (csv) => {
+      downloadCsv('tasks.csv', csv)
+      toast.success('Tasks CSV exported')
+    },
+    onError: (e: Error) => toast.error(`Export failed: ${e.message}`),
   })
 
   const statuses = useMemo(() => tasks.map(t => taskStates[t.id]?.status ?? t.status), [tasks, taskStates])
@@ -73,9 +91,22 @@ export function Tasks() {
 
   function openNew() { setEditTask(undefined); setFormOpen(true) }
   function openEdit(t: Task) { setEditTask(t); setFormOpen(true) }
+  async function handleImportChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    importMut.mutate(await file.text())
+  }
 
   return (
     <div className="flex-1 min-h-screen">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={handleImportChange}
+      />
       <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-xl">
         <div className="flex min-h-14 flex-col gap-3 px-4 py-3 sm:px-6 lg:px-8 md:flex-row md:items-center md:gap-4">
           <div className="min-w-0">
@@ -91,12 +122,18 @@ export function Tasks() {
                 className="h-9 w-full pl-8 md:h-8 md:w-64"
               />
             </div>
-            <div className="grid grid-cols-3 gap-2 md:flex md:flex-wrap md:items-center">
+            <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
               <Button variant="outline" size="sm" onClick={() => stopAll.mutate()} disabled={counts.running === 0 || stopAll.isPending} className="w-full md:w-auto">
                 <Square className="size-3.5" /> Stop all
               </Button>
               <Button variant="outline" size="sm" onClick={() => startAll.mutate()} disabled={startAll.isPending} className="w-full md:w-auto">
                 <Play className="size-3.5" /> Start all
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()} disabled={importMut.isPending} className="w-full md:w-auto">
+                <Upload className="size-3.5" /> Import CSV
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => exportMut.mutate()} disabled={exportMut.isPending} className="w-full md:w-auto">
+                <Download className="size-3.5" /> Export CSV
               </Button>
               <Button size="sm" onClick={openNew} className="w-full md:w-auto">
                 <Plus className="size-3.5" /> New task

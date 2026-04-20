@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, CreditCard as CreditCardIcon } from 'lucide-react'
+import { Plus, Trash2, CreditCard as CreditCardIcon, Download, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '../api/client'
 import type { Card as CardType } from '../api/client'
@@ -10,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { downloadCsv } from '@/lib/csv'
 
 const EMPTY: Omit<CardType, 'id' | 'created_at'> = {
   alias: '', cardholder: '', number: '', expiry_month: '', expiry_year: '', cvv: '',
@@ -88,12 +89,29 @@ function CardDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
 
 export function Cards() {
   const [open, setOpen] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
   const { data: cards = [], isLoading } = useQuery({ queryKey: ['cards'], queryFn: api.cards.list })
   const deleteMut = useMutation({
     mutationFn: api.cards.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['cards'] }); toast.success('Card deleted') },
     onError: (e: Error) => toast.error(`Delete failed: ${e.message}`),
+  })
+  const importMut = useMutation({
+    mutationFn: api.cards.importCsv,
+    onSuccess: ({ imported }) => {
+      qc.invalidateQueries({ queryKey: ['cards'] })
+      toast.success(`Imported ${imported} card${imported === 1 ? '' : 's'}`)
+    },
+    onError: (e: Error) => toast.error(`Import failed: ${e.message}`),
+  })
+  const exportMut = useMutation({
+    mutationFn: api.cards.exportCsv,
+    onSuccess: (csv) => {
+      downloadCsv('cards.csv', csv)
+      toast.success('Cards CSV exported')
+    },
+    onError: (e: Error) => toast.error(`Export failed: ${e.message}`),
   })
 
   function confirmDelete(c: CardType) {
@@ -102,13 +120,36 @@ export function Cards() {
       cancel: { label: 'Cancel', onClick: () => {} },
     })
   }
+  async function handleImportChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    importMut.mutate(await file.text())
+  }
 
   return (
     <div className="flex-1 min-h-screen">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={handleImportChange}
+      />
       <PageHeader
         title="Cards"
         description="Payment cards available to tasks"
-        actions={<Button size="sm" onClick={() => setOpen(true)}><Plus className="size-3.5" /> Add card</Button>}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()} disabled={importMut.isPending}>
+              <Upload className="size-3.5" /> Import CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => exportMut.mutate()} disabled={exportMut.isPending}>
+              <Download className="size-3.5" /> Export CSV
+            </Button>
+            <Button size="sm" onClick={() => setOpen(true)}><Plus className="size-3.5" /> Add card</Button>
+          </>
+        }
       />
       <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
         {isLoading ? (

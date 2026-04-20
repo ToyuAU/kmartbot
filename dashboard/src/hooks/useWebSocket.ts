@@ -15,6 +15,7 @@ export function useWebSocket() {
   const setWsConnected = useStore((s) => s.setWsConnected)
   const setTaskState = useStore((s) => s.setTaskState)
   const appendLog = useStore((s) => s.appendLog)
+  const clearLogs = useStore((s) => s.clearLogs)
 
   const retryDelay = useRef(1000)
   const ws = useRef<WebSocket | null>(null)
@@ -58,10 +59,14 @@ export function useWebSocket() {
     function handleEvent(event: Record<string, unknown>) {
       switch (event.type) {
         case 'task_update': {
+          const taskId = event.task_id as string
           const status = event.status as import('../store').TaskStatus
           const orderNumber = event.order_number as string | undefined
           const errMsg = event.error_message as string | undefined
-          setTaskState(event.task_id as string, {
+          if (status === 'running' && !event.step) {
+            clearLogs(taskId)
+          }
+          setTaskState(taskId, {
             status,
             step: (event.step as string) ?? '',
             order_number: orderNumber,

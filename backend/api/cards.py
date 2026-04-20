@@ -1,13 +1,19 @@
 """CRUD endpoints for payment cards."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import List
 import aiosqlite
+from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.card import Card, CardCreate, CardUpdate
+from backend.services.csv_utils import csv_text, parse_csv
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
+
+
+class CsvImportBody(BaseModel):
+    csv: str
 
 
 @router.get("", response_model=List[Card])
@@ -15,6 +21,52 @@ async def list_cards(db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute("SELECT * FROM cards ORDER BY created_at DESC") as cur:
         rows = await cur.fetchall()
     return [Card.from_row(r) for r in rows]
+
+
+@router.get("/export")
+async def export_cards_csv(db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute("SELECT * FROM cards ORDER BY created_at DESC") as cur:
+        rows = await cur.fetchall()
+    fieldnames = ["alias", "cardholder", "number", "expiry_month", "expiry_year", "cvv"]
+    payload = csv_text((Card.from_row(r).model_dump() for r in rows), fieldnames)
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="cards.csv"'},
+    )
+
+
+@router.post("/import", status_code=201)
+async def import_cards_csv(
+    body: CsvImportBody,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    rows = parse_csv(body.csv)
+    imported = 0
+    for idx, row in enumerate(rows, start=2):
+        try:
+            card_in = CardCreate(
+                alias=row.get("alias", ""),
+                cardholder=row.get("cardholder", ""),
+                number=row.get("number", ""),
+                expiry_month=row.get("expiry_month", ""),
+                expiry_year=row.get("expiry_year", ""),
+                cvv=row.get("cvv", ""),
+            )
+        except Exception as exc:
+            raise HTTPException(400, f"Invalid card row {idx}: {exc}") from exc
+        if not card_in.alias or not card_in.number:
+            raise HTTPException(400, f'Invalid card row {idx}: "alias" and "number" are required')
+        card = Card(id=Card.new_id(), created_at=Card.now(), **card_in.model_dump())
+        await db.execute(
+            """INSERT INTO cards
+               (id, alias, cardholder, number, expiry_month, expiry_year, cvv, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (card.id, card.alias, card.cardholder, card.number,
+             card.expiry_month, card.expiry_year, card.cvv, card.created_at),
+        )
+        imported += 1
+    return {"imported": imported}
 
 
 @router.get("/{card_id}", response_model=Card)

@@ -54,6 +54,11 @@ async def _write_log(
     await db.commit()
 
 
+async def _clear_logs(db: aiosqlite.Connection, task_id: str) -> None:
+    await db.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+    await db.commit()
+
+
 async def run_task(task_id: str) -> None:
     """
     Full lifecycle for a single task.
@@ -68,6 +73,9 @@ async def run_task(task_id: str) -> None:
         if not row:
             return
         task = Task.from_row(row)
+
+        # Each start should present a fresh run log stream.
+        await _clear_logs(db, task_id)
 
         # Load profile
         async with db.execute("SELECT * FROM profiles WHERE id = ?", (task.profile_id,)) as cur:

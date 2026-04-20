@@ -58,6 +58,10 @@ export interface TaskLog {
   ts: string
 }
 
+export interface CsvImportResult {
+  imported: number
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
@@ -71,6 +75,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+async function requestText(path: string, options?: RequestInit): Promise<string> {
+  const res = await fetch(path, options)
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`${res.status} ${text}`)
+  }
+  return res.text()
+}
+
 // ── Profiles ──────────────────────────────────────────────────────────────────
 export const api = {
   profiles: {
@@ -81,6 +94,9 @@ export const api = {
     update: (id: string, body: Partial<Profile>) =>
       request<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (id: string) => request<void>(`/api/profiles/${id}`, { method: 'DELETE' }),
+    exportCsv: () => requestText('/api/profiles/export'),
+    importCsv: (csv: string) =>
+      request<CsvImportResult>('/api/profiles/import', { method: 'POST', body: JSON.stringify({ csv }) }),
   },
 
   cards: {
@@ -90,6 +106,9 @@ export const api = {
     update: (id: string, body: Partial<Card>) =>
       request<Card>(`/api/cards/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (id: string) => request<void>(`/api/cards/${id}`, { method: 'DELETE' }),
+    exportCsv: () => requestText('/api/cards/export'),
+    importCsv: (csv: string) =>
+      request<CsvImportResult>('/api/cards/import', { method: 'POST', body: JSON.stringify({ csv }) }),
   },
 
   tasks: {
@@ -105,6 +124,9 @@ export const api = {
     startAll: () => request<{ started: number }>('/api/tasks/start-all', { method: 'POST' }),
     stopAll: () => request<{ ok: boolean }>('/api/tasks/stop-all', { method: 'POST' }),
     logs: (id: string) => request<TaskLog[]>(`/api/tasks/${id}/logs`),
+    exportCsv: () => requestText('/api/tasks/export'),
+    importCsv: (csv: string) =>
+      request<CsvImportResult>('/api/tasks/import', { method: 'POST', body: JSON.stringify({ csv }) }),
   },
 
   settings: {
