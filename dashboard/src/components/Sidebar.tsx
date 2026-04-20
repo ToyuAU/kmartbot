@@ -17,6 +17,7 @@ export function Sidebar() {
     <>
       <aside className="hidden w-56 shrink-0 border-r border-border bg-card/30 md:sticky md:top-0 md:flex md:h-dvh md:self-start md:flex-col md:overflow-hidden">
         <div className="flex h-14 items-center gap-2 border-b border-border px-5">
+          <img src="/logo.png" alt="Nova AIO logo" className="h-5 w-5 rounded-md object-contain" />
           <span className="font-semibold tracking-tight">Nova AIO</span>
           <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">v1.0.0</span>
         </div>
