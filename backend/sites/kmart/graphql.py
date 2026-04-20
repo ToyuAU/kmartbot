@@ -71,8 +71,8 @@ fragment BagFields on Cart {
 }"""
 
 
-def _gen_email(config: dict) -> str:
-    """Generate a random order email."""
+def _gen_email(config: dict, profile: Profile) -> str:
+    """Choose the checkout email source in priority order."""
     if config.get("use_gmail_spoofing") and config.get("gmail_spoofing_email"):
         base = config["gmail_spoofing_email"]
         username, domain = base.split("@", 1)
@@ -83,8 +83,11 @@ def _gen_email(config: dict) -> str:
         fn = "".join(random.choices(string.ascii_lowercase, k=5))
         ln = "".join(random.choices(string.ascii_lowercase, k=5))
         return f"{fn}{ln}{random.randint(100, 999)}@{config['catchall_domain']}"
-    else:
-        return f"user{random.randint(10000, 99999)}@example.com"
+    elif profile.email:
+        return profile.email
+    raise ValueError(
+        "No checkout email available: configure Gmail spoofing, a catch-all domain, or a profile email"
+    )
 
 
 # ── Payload builders ──────────────────────────────────────────────────────────
@@ -145,7 +148,7 @@ def set_shipping(cart_id: str, profile: Profile, config: dict) -> tuple[str, dic
     Returns (email_used, payload).
     email is generated here so the caller can log/track it.
     """
-    email = _gen_email(config)
+    email = _gen_email(config, profile)
     addr = {
         "firstName": profile.first_name,
         "lastName": profile.last_name,
