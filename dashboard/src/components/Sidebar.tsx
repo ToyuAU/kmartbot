@@ -15,13 +15,13 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="hidden w-56 shrink-0 border-r border-border bg-card/30 md:flex md:min-h-screen md:flex-col">
+      <aside className="hidden w-56 shrink-0 border-r border-border bg-card/30 md:sticky md:top-0 md:flex md:h-dvh md:self-start md:flex-col md:overflow-hidden">
         <div className="flex h-14 items-center gap-2 border-b border-border px-5">
           <span className="font-semibold tracking-tight">Nova AIO</span>
           <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">v1.0.0</span>
         </div>
 
-        <nav className="flex-1 space-y-0.5 px-2 py-3">
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
           {NAV.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}

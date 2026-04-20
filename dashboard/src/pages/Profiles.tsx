@@ -10,6 +10,16 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { downloadCsv } from '@/lib/csv'
 
@@ -121,6 +131,7 @@ function ProfileDialog({ profile, open, onOpenChange }: { profile?: Profile; ope
 
 export function Profiles() {
   const [editing, setEditing] = useState<Profile | undefined>()
+  const [deleting, setDeleting] = useState<Profile | undefined>()
   const [open, setOpen] = useState(false)
   const importInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
@@ -128,7 +139,7 @@ export function Profiles() {
   const { data: profiles = [], isLoading } = useQuery({ queryKey: ['profiles'], queryFn: api.profiles.list })
   const deleteMut = useMutation({
     mutationFn: api.profiles.delete,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profiles'] }); toast.success('Profile deleted') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profiles'] }); toast.success('Profile deleted'); setDeleting(undefined) },
     onError: (e: Error) => toast.error(`Delete failed: ${e.message}`),
   })
   const importMut = useMutation({
@@ -150,12 +161,6 @@ export function Profiles() {
 
   function openNew() { setEditing(undefined); setOpen(true) }
   function openEdit(p: Profile) { setEditing(p); setOpen(true) }
-  function confirmDelete(p: Profile) {
-    toast(`Delete "${p.name}"?`, {
-      action: { label: 'Delete', onClick: () => deleteMut.mutate(p.id) },
-      cancel: { label: 'Cancel', onClick: () => {} },
-    })
-  }
   async function handleImportChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -215,7 +220,7 @@ export function Profiles() {
                     </div>
                     <div className="flex shrink-0 gap-1">
                       <Button variant="ghost" size="iconSm" onClick={() => openEdit(p)}><Pencil className="size-3.5" /></Button>
-                      <Button variant="ghost" size="iconSm" onClick={() => confirmDelete(p)} className="hover:text-red-400"><Trash2 className="size-3.5" /></Button>
+                      <Button variant="ghost" size="iconSm" onClick={() => setDeleting(p)} className="hover:text-red-400"><Trash2 className="size-3.5" /></Button>
                     </div>
                   </div>
                   <div className="space-y-1 text-xs text-muted-foreground">
@@ -236,6 +241,27 @@ export function Profiles() {
         )}
       </div>
       {open && <ProfileDialog profile={editing} open={open} onOpenChange={setOpen} />}
+      <AlertDialog open={!!deleting} onOpenChange={(next) => !next && setDeleting(undefined)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete profile?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting
+                ? `This will permanently remove "${deleting.name}" from your saved profiles.`
+                : 'This profile will be permanently removed.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMut.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!deleting || deleteMut.isPending}
+              onClick={() => deleting && deleteMut.mutate(deleting.id)}
+            >
+              {deleteMut.isPending ? 'Deleting…' : 'Delete profile'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -10,6 +10,16 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { downloadCsv } from '@/lib/csv'
 
 const EMPTY: Omit<CardType, 'id' | 'created_at'> = {
@@ -89,12 +99,13 @@ function CardDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
 
 export function Cards() {
   const [open, setOpen] = useState(false)
+  const [deleting, setDeleting] = useState<CardType | undefined>()
   const importInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
   const { data: cards = [], isLoading } = useQuery({ queryKey: ['cards'], queryFn: api.cards.list })
   const deleteMut = useMutation({
     mutationFn: api.cards.delete,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['cards'] }); toast.success('Card deleted') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['cards'] }); toast.success('Card deleted'); setDeleting(undefined) },
     onError: (e: Error) => toast.error(`Delete failed: ${e.message}`),
   })
   const importMut = useMutation({
@@ -114,12 +125,6 @@ export function Cards() {
     onError: (e: Error) => toast.error(`Export failed: ${e.message}`),
   })
 
-  function confirmDelete(c: CardType) {
-    toast(`Delete "${c.alias}"?`, {
-      action: { label: 'Delete', onClick: () => deleteMut.mutate(c.id) },
-      cancel: { label: 'Cancel', onClick: () => {} },
-    })
-  }
   async function handleImportChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -177,7 +182,7 @@ export function Cards() {
                       <div className="text-xs uppercase tracking-wider text-muted-foreground">{detectBrand(c.number)}</div>
                       <div className="font-medium mt-0.5 truncate">{c.alias}</div>
                     </div>
-                    <Button variant="ghost" size="iconSm" onClick={() => confirmDelete(c)} className="hover:text-red-400">
+                    <Button variant="ghost" size="iconSm" onClick={() => setDeleting(c)} className="hover:text-red-400">
                       <Trash2 className="size-3.5" />
                     </Button>
                   </div>
@@ -195,6 +200,27 @@ export function Cards() {
         )}
       </div>
       {open && <CardDialog open={open} onOpenChange={setOpen} />}
+      <AlertDialog open={!!deleting} onOpenChange={(next) => !next && setDeleting(undefined)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete card?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting
+                ? `This will permanently remove "${deleting.alias}" from your saved cards.`
+                : 'This card will be permanently removed.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMut.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!deleting || deleteMut.isPending}
+              onClick={() => deleting && deleteMut.mutate(deleting.id)}
+            >
+              {deleteMut.isPending ? 'Deleting…' : 'Delete card'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
