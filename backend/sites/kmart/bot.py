@@ -19,9 +19,13 @@ Retries use exponential backoff. asyncio.CancelledError propagates up cleanly.
 
 import asyncio
 import random
+import re
 from collections import deque
 from pathlib import Path
 from typing import Optional
+
+# Matches Kmart's "...maximum purchase limits(N)" wording in any error message.
+_QUANTITY_LIMIT_RE = re.compile(r'maximum\s+purchase\s+limits?\s*\((\d+)\)', re.I)
 
 from backend.sites.base import BaseSite, LogFn
 from backend.services.http_client import HttpClient
@@ -43,7 +47,7 @@ _staff_codes: Optional[deque] = None
 
 def _load_staff_codes() -> deque:
     global _staff_codes
-    if _staff_codes is not None:
+    if _staff_codes:
         return _staff_codes
     codes: list[str] = []
     if STAFF_CODES_FILE.exists():
@@ -52,8 +56,12 @@ def _load_staff_codes() -> deque:
             if line and not line.startswith("#"):
                 codes.append(line)
     random.shuffle(codes)
-    _staff_codes = deque(codes)
-    return _staff_codes
+    # Only cache a non-empty pool — otherwise re-read the file on next call
+    # so adding codes to staff_codes.txt doesn't require a backend restart.
+    if codes:
+        _staff_codes = deque(codes)
+        return _staff_codes
+    return deque()
 
 
 def _next_staff_code() -> Optional[str]:
@@ -82,6 +90,9 @@ class KmartBot(BaseSite):
         self._cart_id: str = ""
         self._cart_version: int = 0
         self._product_data: dict = {}
+        # Set to True once we've already clamped the quantity to a discovered max,
+        # so a second checkout failure with the same wording triggers a real abort.
+        self._qty_clamped: bool = False
 
     async def _emit_log(self, level: str, message: str, step: str = "") -> None:
         await self._log(level, message, step)
@@ -142,11 +153,12 @@ class KmartBot(BaseSite):
         body = resp.json()
         if "errors" in body:
             msg = body["errors"][0].get("message", "")
-            # Quantity limit error — extract max qty and retry with 1
-            if "quantity" in msg.lower() and "maximum" in msg.lower():
-                import re
-                m = re.search(r'maximum\s+purchase\s+limits?\s*\((\d+)\)', msg, re.I)
-                max_qty = int(m.group(1)) if m else 1
+            # Quantity limit error — extract max qty and retry with that value
+            m = _QUANTITY_LIMIT_RE.search(msg)
+            if m:
+                max_qty = int(m.group(1))
+                self.task.quantity = max_qty
+                self._qty_clamped = True
                 await self.warn(f"Quantity limit: {max_qty}. Retrying with {max_qty}.", step="ADDING_TO_CART")
                 resp2 = await self._client.post_json(
                     self.GRAPHQL,
@@ -316,6 +328,21 @@ class KmartBot(BaseSite):
                 # Unrecoverable — cart is gone. Bail out of watch mode too.
                 if "cart" in msg and ("not found" in msg or "invalid" in msg or "expired" in msg):
                     raise
+                # Quantity exceeds checkout limit — update the cart line item to
+                # the allowed max and re-run the checkout step from scratch.
+                # Only attempt this once; a repeat means something else is wrong.
+                qty_match = _QUANTITY_LIMIT_RE.search(str(e))
+                if qty_match and not self._qty_clamped:
+                    max_qty = int(qty_match.group(1))
+                    self._qty_clamped = True
+                    try:
+                        await self._clamp_line_item_quantity(max_qty)
+                        continue
+                    except Exception as clamp_err:
+                        await self.warn(
+                            f"Quantity clamp failed: {clamp_err}",
+                            step="TOKENIZING_CARD",
+                        )
                 wait = min(2 ** attempt, 30) + random.uniform(0, 2)
                 await self.warn(
                     f"Checkout attempt {attempt} failed: {e}. Retrying in {wait:.1f}s",
@@ -323,6 +350,33 @@ class KmartBot(BaseSite):
                 )
                 await asyncio.sleep(wait)
         raise RuntimeError(f"Checkout burst exhausted after {max_attempts} attempts: {last_exc}")
+
+    async def _clamp_line_item_quantity(self, max_qty: int) -> None:
+        """Update the existing cart's line item quantity to max_qty in place.
+        Cart, shipping, staff code, and flybuys are preserved — only quantity changes."""
+        line_item_id = self._product_data.get("id")
+        if not line_item_id:
+            raise RuntimeError("Cannot clamp quantity: no line item id on cart")
+        await self.warn(
+            f"Quantity {self.task.quantity} exceeds checkout limit ({max_qty}). "
+            f"Updating cart to quantity={max_qty}.",
+            step="TOKENIZING_CARD",
+        )
+        resp = await self._client.post_json(
+            self.GRAPHQL,
+            gql.change_line_item_quantity(self._cart_id, line_item_id, max_qty),
+        )
+        if not resp:
+            raise RuntimeError("No response from changeLineItemQuantity")
+        body = resp.json()
+        if "errors" in body:
+            raise RuntimeError(f"changeLineItemQuantity error: {body['errors'][0].get('message')}")
+        cart = body.get("data", {}).get("updateMyCart", {})
+        self._cart_version = cart.get("version", self._cart_version)
+        items = cart.get("lineItems", [])
+        if items:
+            self._product_data = items[0]
+        self.task.quantity = max_qty
 
     async def _submit_order(self, charge_3ds_id: str) -> str:
         await self.info("Submitting order...", step="SUBMITTING_ORDER")

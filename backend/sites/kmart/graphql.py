@@ -143,6 +143,28 @@ def add_to_cart(cart_id: str, sku: str, quantity: Optional[int] = None) -> dict:
     }
 
 
+def change_line_item_quantity(cart_id: str, line_item_id: str, quantity: int) -> dict:
+    return {
+        "operationName": "updateMyBag",
+        "variables": {
+            "id": cart_id,
+            "version": 415,
+            "actions": [
+                {"changeLineItemQuantity": {"lineItemId": line_item_id, "quantity": int(quantity)}},
+            ],
+        },
+        "query": (
+            "mutation updateMyBag($id: String!, $version: Long!, $actions: [MyCartUpdateAction!]!) {\n"
+            "  updateMyCart(id: $id, version: $version, actions: $actions) {\n"
+            "    ...BasicBagFields\n"
+            "    lineItems { ...LineItemFields __typename }\n"
+            "    __typename\n"
+            "  }\n"
+            "}\n"
+        ) + _BASIC_BAG_FIELDS + _LINE_ITEM_FIELDS,
+    }
+
+
 def set_shipping(cart_id: str, profile: Profile, config: dict) -> tuple[str, dict]:
     """
     Returns (email_used, payload).

@@ -117,7 +117,23 @@ export function TaskForm({ task, open, onOpenChange }: Props) {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Cards</Label>
+            <div className="flex items-center justify-between">
+              <Label>Cards</Label>
+              {cards.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      card_ids: f.card_ids.length === cards.length ? [] : cards.map((c) => c.id),
+                    }))
+                  }
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {form.card_ids.length === cards.length ? 'Deselect all' : 'Select all'}
+                </button>
+              )}
+            </div>
             <div className="rounded-md border border-border divide-y divide-border max-h-40 overflow-y-auto">
               {cards.length === 0 ? (
                 <div className="px-3 py-2.5 text-xs text-muted-foreground">No cards — add some in Cards.</div>
