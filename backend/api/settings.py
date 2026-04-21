@@ -8,6 +8,7 @@ from typing import Dict
 import aiosqlite
 
 from backend.database import get_db
+from backend.config import apply_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -28,4 +29,5 @@ async def save_settings(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+    apply_settings(body)
     return body

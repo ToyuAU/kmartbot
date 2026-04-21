@@ -123,6 +123,24 @@ export function Tasks() {
               />
             </div>
             <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => startAll.mutate()}
+                disabled={startAll.isPending}
+                className="w-full border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 md:w-auto"
+              >
+                <Play className="size-3.5" /> Start all
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => stopAll.mutate()}
+                disabled={counts.running === 0 || stopAll.isPending}
+                className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300 md:w-auto"
+              >
+                <Square className="size-3.5" /> Stop all
+              </Button>
               <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()} disabled={importMut.isPending} className="w-full md:w-auto">
                 <Upload className="size-3.5" /> Import CSV
               </Button>
@@ -143,25 +161,6 @@ export function Tasks() {
           <Stat label="Running" value={counts.running} tone="info" />
           <Stat label="Success" value={counts.success} tone="success" />
           <Stat label="Failed" value={counts.failed} tone="destructive" />
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Button
-            size="lg"
-            onClick={() => startAll.mutate()}
-            disabled={startAll.isPending}
-            className="h-12 rounded-xl bg-emerald-600 text-white shadow-sm hover:bg-emerald-500"
-          >
-            <Play className="size-4" /> Start all tasks
-          </Button>
-          <Button
-            size="lg"
-            onClick={() => stopAll.mutate()}
-            disabled={counts.running === 0 || stopAll.isPending}
-            className="h-12 rounded-xl bg-red-600 text-white shadow-sm hover:bg-red-500"
-          >
-            <Square className="size-4" /> Stop all tasks
-          </Button>
         </div>
 
         {isLoading ? (

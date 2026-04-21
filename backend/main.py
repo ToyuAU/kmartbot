@@ -10,8 +10,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.database import init_db
-from backend.config import config
+import aiosqlite
+
+from backend.database import init_db, DB_PATH
+from backend.config import config, apply_settings
 from backend.api import profiles, cards, tasks, settings, ws
 from backend.core import event_bus
 
@@ -20,6 +22,13 @@ from backend.core import event_bus
 async def lifespan(app: FastAPI):
     # Startup
     await init_db()
+
+    # Overlay persisted dashboard settings on top of config.json defaults
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT key, value FROM settings") as cur:
+            rows = await cur.fetchall()
+    apply_settings({row["key"]: row["value"] for row in rows})
 
     # Register WebSocket broadcaster on the event bus
     from backend.api.ws import _broadcast
