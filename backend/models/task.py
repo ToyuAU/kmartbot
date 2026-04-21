@@ -4,7 +4,8 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
 
 
 class TaskStatus:
@@ -20,7 +21,7 @@ class TaskCreate(BaseModel):
     site: str = "kmart"
     sku: str
     profile_id: str
-    card_ids: List[str] = []
+    card_ids: List[str] = Field(default_factory=list)
     quantity: int = 1
     use_staff_codes: bool = True
     use_flybuys: bool = True

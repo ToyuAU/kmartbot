@@ -18,6 +18,7 @@ class CardCreate(BaseModel):
 class CardUpdate(BaseModel):
     alias: Optional[str] = None
     cardholder: Optional[str] = None
+    number: Optional[str] = None
     expiry_month: Optional[str] = None
     expiry_year: Optional[str] = None
     cvv: Optional[str] = None

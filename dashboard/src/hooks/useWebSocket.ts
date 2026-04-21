@@ -4,7 +4,7 @@
  * Dispatches incoming events to the Zustand store.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useEffectEvent, useRef } from 'react'
 import { toast } from 'sonner'
 import { useStore } from '../store'
 import type { TaskLog } from '../api/client'
@@ -20,6 +20,44 @@ export function useWebSocket() {
   const retryDelay = useRef(1000)
   const ws = useRef<WebSocket | null>(null)
   const unmounted = useRef(false)
+
+  const handleEvent = useEffectEvent((event: Record<string, unknown>) => {
+    switch (event.type) {
+      case 'task_update': {
+        const taskId = event.task_id as string
+        const status = event.status as import('../store').TaskStatus
+        const orderNumber = event.order_number as string | undefined
+        const errMsg = event.error_message as string | undefined
+        if (status === 'running' && !event.step) {
+          clearLogs(taskId)
+        }
+        setTaskState(taskId, {
+          status,
+          step: (event.step as string) ?? '',
+          order_number: orderNumber,
+          error_message: errMsg,
+        })
+        if (status === 'success' && orderNumber) {
+          toast.success(`Order placed: ${orderNumber}`)
+        } else if (status === 'failed' && errMsg) {
+          toast.error(`Task failed: ${errMsg}`)
+        }
+        break
+      }
+      case 'task_log':
+        appendLog({
+          id: Date.now(),
+          task_id: event.task_id as string,
+          level: event.level as TaskLog['level'],
+          message: event.message as string,
+          step: (event.step as string) ?? '',
+          ts: (event.ts as string) ?? new Date().toISOString(),
+        })
+        break
+      case 'ping':
+        break
+    }
+  })
 
   useEffect(() => {
     unmounted.current = false
@@ -56,48 +94,10 @@ export function useWebSocket() {
       }
     }
 
-    function handleEvent(event: Record<string, unknown>) {
-      switch (event.type) {
-        case 'task_update': {
-          const taskId = event.task_id as string
-          const status = event.status as import('../store').TaskStatus
-          const orderNumber = event.order_number as string | undefined
-          const errMsg = event.error_message as string | undefined
-          if (status === 'running' && !event.step) {
-            clearLogs(taskId)
-          }
-          setTaskState(taskId, {
-            status,
-            step: (event.step as string) ?? '',
-            order_number: orderNumber,
-            error_message: errMsg,
-          })
-          if (status === 'success' && orderNumber) {
-            toast.success(`Order placed: ${orderNumber}`)
-          } else if (status === 'failed' && errMsg) {
-            toast.error(`Task failed: ${errMsg}`)
-          }
-          break
-        }
-        case 'task_log':
-          appendLog({
-            id: Date.now(),
-            task_id: event.task_id as string,
-            level: event.level as TaskLog['level'],
-            message: event.message as string,
-            step: (event.step as string) ?? '',
-            ts: (event.ts as string) ?? new Date().toISOString(),
-          })
-          break
-        case 'ping':
-          break
-      }
-    }
-
     connect()
     return () => {
       unmounted.current = true
       ws.current?.close()
     }
-  }, [])
+  }, [appendLog, clearLogs, setTaskState, setWsConnected])
 }

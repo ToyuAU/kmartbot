@@ -1,4 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
+
+import { api } from '../api/client'
 import { useStore } from '../store'
 import type { TaskLog } from '../api/client'
 import { cn } from '@/lib/utils'
@@ -26,8 +29,26 @@ function LogLine({ log }: { log: TaskLog }) {
 const EMPTY: TaskLog[] = []
 
 export function LogStream({ taskId }: { taskId: string }) {
-  const logs = useStore((s) => s.taskLogs[taskId]) ?? EMPTY
+  const liveLogs = useStore((s) => s.taskLogs[taskId]) ?? EMPTY
+  const logVersion = useStore((s) => s.logVersions[taskId] ?? 0)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const { data: persistedLogs = EMPTY, isLoading } = useQuery({
+    queryKey: ['task-logs', taskId, logVersion],
+    queryFn: () => api.tasks.logs(taskId),
+    staleTime: 0,
+  })
+
+  const logs = useMemo(() => {
+    const deduped: TaskLog[] = []
+    const seen = new Set<string>()
+    for (const log of [...persistedLogs, ...liveLogs]) {
+      const key = `${log.ts}|${log.step}|${log.level}|${log.message}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      deduped.push(log)
+    }
+    return deduped
+  }, [liveLogs, persistedLogs])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -36,10 +57,12 @@ export function LogStream({ taskId }: { taskId: string }) {
   return (
     <div className="border-t border-border bg-background/50">
       <div className="max-h-64 space-y-1 overflow-y-auto px-4 py-2.5">
-        {logs.length === 0 ? (
+        {isLoading && logs.length === 0 ? (
+          <div className="text-muted-foreground text-xs py-2">Loading logs…</div>
+        ) : logs.length === 0 ? (
           <div className="text-muted-foreground text-xs py-2">Waiting for logs…</div>
         ) : (
-          logs.map((log) => <LogLine key={log.id} log={log} />)
+          logs.map((log) => <LogLine key={`${log.id}-${log.ts}-${log.message}`} log={log} />)
         )}
         <div ref={bottomRef} />
       </div>

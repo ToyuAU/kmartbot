@@ -27,6 +27,7 @@ interface Store {
 
   // per-task log accumulation (task_id → logs[])
   taskLogs: Record<string, TaskLog[]>
+  logVersions: Record<string, number>
   appendLog: (log: TaskLog) => void
   clearLogs: (task_id: string) => void
 }
@@ -45,6 +46,7 @@ export const useStore = create<Store>((set) => ({
     })),
 
   taskLogs: {},
+  logVersions: {},
   appendLog: (log) =>
     set((s) => {
       const existing = s.taskLogs[log.task_id] ?? []
@@ -59,5 +61,11 @@ export const useStore = create<Store>((set) => ({
       return { taskLogs: { ...s.taskLogs, [log.task_id]: updated } }
     }),
   clearLogs: (task_id) =>
-    set((s) => ({ taskLogs: { ...s.taskLogs, [task_id]: [] } })),
+    set((s) => ({
+      taskLogs: { ...s.taskLogs, [task_id]: [] },
+      logVersions: {
+        ...s.logVersions,
+        [task_id]: (s.logVersions[task_id] ?? 0) + 1,
+      },
+    })),
 }))

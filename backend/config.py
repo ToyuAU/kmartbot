@@ -73,3 +73,17 @@ def apply_settings(values: dict[str, str]) -> None:
         if key == "catchall_domain" and isinstance(value, str):
             value = value.lstrip("@").strip()
         setattr(config, key, value)
+
+
+def export_settings() -> dict[str, str]:
+    """Return the effective runtime config in the same string form used by the API."""
+    out: dict[str, str] = {}
+    for key in Config.model_fields:
+        value = getattr(config, key)
+        if isinstance(value, bool):
+            out[key] = "true" if value else "false"
+        elif value is None:
+            out[key] = ""
+        else:
+            out[key] = str(value)
+    return out

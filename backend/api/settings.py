@@ -8,16 +8,14 @@ from typing import Dict
 import aiosqlite
 
 from backend.database import get_db
-from backend.config import apply_settings
+from backend.config import apply_settings, export_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 @router.get("", response_model=Dict[str, str])
 async def get_settings(db: aiosqlite.Connection = Depends(get_db)):
-    async with db.execute("SELECT key, value FROM settings") as cur:
-        rows = await cur.fetchall()
-    return {row["key"]: row["value"] for row in rows}
+    return export_settings()
 
 
 @router.put("", response_model=Dict[str, str])
@@ -30,4 +28,4 @@ async def save_settings(
             (key, value),
         )
     apply_settings(body)
-    return body
+    return export_settings()

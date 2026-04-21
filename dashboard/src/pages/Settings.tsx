@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save, Webhook, Mail, Shield } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '../api/client'
@@ -45,18 +45,24 @@ const TOGGLES: { key: string; label: string; description: string; icon?: typeof 
 ]
 
 export function Settings() {
-  const [form, setForm] = useState<Record<string, string>>({})
+  const [draft, setDraft] = useState<Record<string, string> | null>(null)
+  const qc = useQueryClient()
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
-
-  useEffect(() => {
-    if (settings) setForm(settings)
-  }, [settings])
+  const form = draft ?? settings ?? {}
 
   const saveMut = useMutation({
     mutationFn: api.settings.save,
-    onSuccess: () => toast.success('Settings saved'),
+    onSuccess: (saved) => {
+      qc.setQueryData(['settings'], saved)
+      setDraft(null)
+      toast.success('Settings saved')
+    },
     onError: (e: Error) => toast.error(`Save failed: ${e.message}`),
   })
+
+  function updateField(key: string, value: string) {
+    setDraft((current) => ({ ...(current ?? settings ?? {}), [key]: value }))
+  }
 
   return (
     <div className="flex-1 min-h-screen">
@@ -92,7 +98,7 @@ export function Settings() {
                     type={f.type ?? 'text'}
                     value={form[f.key] ?? ''}
                     placeholder={f.placeholder}
-                    onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
+                    onChange={(e) => updateField(f.key, e.target.value)}
                   />
                   {f.description && <p className="text-xs text-muted-foreground">{f.description}</p>}
                 </div>
@@ -122,7 +128,7 @@ export function Settings() {
                 </div>
                 <Switch
                   checked={form[t.key] === 'true'}
-                  onCheckedChange={(v) => setForm((s) => ({ ...s, [t.key]: v ? 'true' : 'false' }))}
+                  onCheckedChange={(v) => updateField(t.key, v ? 'true' : 'false')}
                 />
               </div>
             ))}

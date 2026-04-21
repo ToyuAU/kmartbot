@@ -133,4 +133,16 @@ async def update_profile(
 
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(profile_id: str, db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute(
+        "SELECT name FROM tasks WHERE profile_id = ? ORDER BY created_at DESC LIMIT 4",
+        (profile_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    if rows:
+        names = ", ".join((row["name"] or "Unnamed task") for row in rows[:3])
+        suffix = "..." if len(rows) > 3 else ""
+        raise HTTPException(
+            409,
+            f"Profile is still assigned to existing tasks ({names}{suffix})",
+        )
     await db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))

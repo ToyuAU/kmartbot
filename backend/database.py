@@ -1,10 +1,12 @@
 """
 SQLite database setup using aiosqlite.
-Creates all tables on first run, provides a context-managed connection helper.
+Creates all tables on first run, provides configured connection helpers,
+and keeps foreign key enforcement enabled for every connection.
 """
 
-import aiosqlite
 from pathlib import Path
+
+import aiosqlite
 
 DB_PATH = Path(__file__).parent.parent / "data" / "kmartbot.db"
 
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     name             TEXT,
     site             TEXT DEFAULT 'kmart',
     sku              TEXT NOT NULL,
-    profile_id       TEXT REFERENCES profiles(id),
+    profile_id       TEXT REFERENCES profiles(id) ON DELETE RESTRICT,
     card_ids         TEXT,
     quantity         INTEGER DEFAULT 1,
     use_staff_codes  INTEGER DEFAULT 1,
@@ -70,8 +72,55 @@ CREATE TABLE IF NOT EXISTS settings (
     value  TEXT
 );
 
+CREATE TABLE IF NOT EXISTS task_runs (
+    id             TEXT PRIMARY KEY,
+    task_id        TEXT NOT NULL,
+    task_name      TEXT,
+    site           TEXT,
+    sku            TEXT NOT NULL,
+    profile_id     TEXT,
+    card_id        TEXT,
+    card_alias     TEXT,
+    proxy          TEXT,
+    watch_mode     INTEGER DEFAULT 0,
+    quantity       INTEGER DEFAULT 1,
+    started_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    duration_ms    INTEGER,
+    final_status   TEXT,
+    order_number   TEXT,
+    error_message  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_run_steps (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    step             TEXT NOT NULL,
+    started_at       TEXT NOT NULL,
+    finished_at      TEXT,
+    duration_ms      INTEGER,
+    terminal_status  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_run_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id     TEXT NOT NULL,
+    event_seq   INTEGER NOT NULL,
+    event_type  TEXT NOT NULL,
+    status      TEXT,
+    level       TEXT,
+    step        TEXT,
+    message     TEXT,
+    payload     TEXT,
+    ts          TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_task_runs_task_id_started_at ON task_runs(task_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_steps_run_id ON task_run_steps(run_id);
+CREATE INDEX IF NOT EXISTS idx_task_run_events_run_id_seq ON task_run_events(run_id, event_seq);
 """
 
 
@@ -83,13 +132,25 @@ async def _migrate(db) -> None:
         pass
 
 
+async def connect_db(*, row_factory: bool = True) -> aiosqlite.Connection:
+    """Open a configured SQLite connection for the app."""
+    db = await aiosqlite.connect(DB_PATH)
+    await db.execute("PRAGMA foreign_keys = ON")
+    if row_factory:
+        db.row_factory = aiosqlite.Row
+    return db
+
+
 async def init_db() -> None:
     """Create tables if they don't exist."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await connect_db(row_factory=False)
+    try:
         await db.executescript(SCHEMA)
         await _migrate(db)
         await db.commit()
+    finally:
+        await db.close()
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -97,11 +158,12 @@ async def get_db() -> aiosqlite.Connection:
     FastAPI dependency that yields an aiosqlite connection with row_factory set.
     Commits on clean exit, rolls back on exception.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        try:
-            yield db
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
+    db = await connect_db()
+    try:
+        yield db
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()

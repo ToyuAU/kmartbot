@@ -8,9 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
 
 interface Props {
   task?: Task
@@ -31,7 +29,7 @@ const EMPTY: Omit<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'error_m
 }
 
 export function TaskForm({ task, open, onOpenChange }: Props) {
-  const [form, setForm] = useState(task ? { ...task } : { ...EMPTY })
+  const [form, setForm] = useState(task ? { ...task, card_ids: task.card_ids.slice(0, 1) } : { ...EMPTY })
   const qc = useQueryClient()
 
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: api.profiles.list })
@@ -56,19 +54,10 @@ export function TaskForm({ task, open, onOpenChange }: Props) {
     onError: (e: Error) => toast.error(`Failed to save: ${e.message}`),
   })
 
-  function toggleCard(cardId: string) {
-    setForm((f) => ({
-      ...f,
-      card_ids: f.card_ids.includes(cardId)
-        ? f.card_ids.filter((c) => c !== cardId)
-        : [...f.card_ids, cardId],
-    }))
-  }
-
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.sku || !form.profile_id) {
-      toast.error('SKU and profile are required')
+    if (!form.sku || !form.profile_id || form.card_ids.length !== 1) {
+      toast.error('SKU, profile, and one card are required')
       return
     }
     if (task) updateMut.mutate(form as Task)
@@ -117,37 +106,23 @@ export function TaskForm({ task, open, onOpenChange }: Props) {
           </div>
 
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label>Cards</Label>
-              {cards.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((f) => ({
-                      ...f,
-                      card_ids: f.card_ids.length === cards.length ? [] : cards.map((c) => c.id),
-                    }))
-                  }
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {form.card_ids.length === cards.length ? 'Deselect all' : 'Select all'}
-                </button>
-              )}
-            </div>
-            <div className="rounded-md border border-border divide-y divide-border max-h-40 overflow-y-auto">
-              {cards.length === 0 ? (
-                <div className="px-3 py-2.5 text-xs text-muted-foreground">No cards — add some in Cards.</div>
-              ) : cards.map((c) => {
-                const checked = form.card_ids.includes(c.id)
-                return (
-                  <label key={c.id} className={cn('flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-accent/50 transition-colors', checked && 'bg-accent/40')}>
-                    <Checkbox checked={checked} onCheckedChange={() => toggleCard(c.id)} />
-                    <span className="text-sm">{c.alias}</span>
-                    <span className="ml-auto text-xs text-muted-foreground font-mono">•••• {c.number.slice(-4)}</span>
-                  </label>
-                )
-              })}
-            </div>
+            <Label>Card<span className="text-red-400"> *</span></Label>
+            <Select
+              value={form.card_ids[0] ?? ''}
+              onValueChange={(value) => setForm((f) => ({ ...f, card_ids: value ? [value] : [] }))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select card…" />
+              </SelectTrigger>
+              <SelectContent>
+                {cards.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No cards — add one first.</div>}
+                {cards.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.alias} · •••• {c.number.slice(-4)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="flex flex-col gap-3 rounded-md border border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">

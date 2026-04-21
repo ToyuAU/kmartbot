@@ -104,9 +104,9 @@ async def update_card(
     updated = existing.model_copy(update=body.model_dump(exclude_none=True))
 
     await db.execute(
-        """UPDATE cards SET alias=?, cardholder=?, expiry_month=?, expiry_year=?, cvv=?
+        """UPDATE cards SET alias=?, cardholder=?, number=?, expiry_month=?, expiry_year=?, cvv=?
            WHERE id=?""",
-        (updated.alias, updated.cardholder, updated.expiry_month,
+        (updated.alias, updated.cardholder, updated.number, updated.expiry_month,
          updated.expiry_year, updated.cvv, card_id),
     )
     return updated
@@ -114,4 +114,20 @@ async def update_card(
 
 @router.delete("/{card_id}", status_code=204)
 async def delete_card(card_id: str, db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute(
+        """SELECT t.name
+           FROM tasks t, json_each(t.card_ids)
+           WHERE json_each.value = ?
+           ORDER BY t.created_at DESC
+           LIMIT 4""",
+        (card_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    if rows:
+        names = ", ".join((row["name"] or "Unnamed task") for row in rows[:3])
+        suffix = "..." if len(rows) > 3 else ""
+        raise HTTPException(
+            409,
+            f"Card is still assigned to existing tasks ({names}{suffix})",
+        )
     await db.execute("DELETE FROM cards WHERE id = ?", (card_id,))

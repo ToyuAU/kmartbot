@@ -4,11 +4,13 @@ Actual execution is delegated to core.task_manager.
 """
 
 import json
-from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import List
+
 import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from backend.core import event_bus
 from backend.database import get_db
 from backend.models.task import Task, TaskCreate, TaskUpdate, TaskLog, TaskStatus
 from backend.services.csv_utils import csv_text, parse_bool, parse_csv, split_pipe
@@ -29,19 +31,68 @@ def _resolve_unique(mapping: dict[str, list[str]], value: str, label: str, row_n
     return matches[0]
 
 
+async def _profile_exists(db: aiosqlite.Connection, profile_id: str) -> bool:
+    async with db.execute("SELECT 1 FROM profiles WHERE id = ?", (profile_id,)) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _missing_card_ids(db: aiosqlite.Connection, card_ids: list[str]) -> list[str]:
+    if not card_ids:
+        return []
+    placeholders = ", ".join("?" for _ in card_ids)
+    async with db.execute(
+        f"SELECT id FROM cards WHERE id IN ({placeholders})",
+        tuple(card_ids),
+    ) as cur:
+        rows = await cur.fetchall()
+    found = {row["id"] for row in rows}
+    return [card_id for card_id in card_ids if card_id not in found]
+
+
+async def _validate_task_dependencies(db: aiosqlite.Connection, task: TaskCreate | Task) -> None:
+    if len(task.card_ids) != 1:
+        raise HTTPException(400, "Exactly one card must be assigned")
+    if task.quantity < 1:
+        raise HTTPException(400, "Quantity must be at least 1")
+    if not await _profile_exists(db, task.profile_id):
+        raise HTTPException(400, "Profile not found")
+    missing_cards = await _missing_card_ids(db, task.card_ids)
+    if missing_cards:
+        raise HTTPException(400, f"Card not found: {', '.join(missing_cards)}")
+
+
+async def _mark_task_failed(db: aiosqlite.Connection, task_id: str, reason: str) -> None:
+    await db.execute(
+        "UPDATE tasks SET status=?, error_message=?, updated_at=? WHERE id=?",
+        (TaskStatus.FAILED, reason, Task.now(), task_id),
+    )
+    await db.commit()
+    await event_bus.publish(
+        event_bus.task_update_event(task_id, TaskStatus.FAILED, error_message=reason)
+    )
+
+
 # ── Bulk controls (must be defined before /{task_id} routes) ─────────────────
 
 @router.post("/start-all", status_code=200)
 async def start_all_tasks(db: aiosqlite.Connection = Depends(get_db)):
     """Start every idle/failed/stopped task."""
     async with db.execute(
-        "SELECT id FROM tasks WHERE status IN ('idle', 'failed', 'stopped')"
+        "SELECT * FROM tasks WHERE status IN ('idle', 'failed', 'stopped')"
     ) as cur:
         rows = await cur.fetchall()
     from backend.core.task_manager import task_manager
+    started = 0
     for row in rows:
-        await task_manager.start(row["id"])
-    return {"started": len(rows)}
+        task = Task.from_row(row)
+        try:
+            await _validate_task_dependencies(db, task)
+        except HTTPException as exc:
+            await _mark_task_failed(db, task.id, str(exc.detail))
+            continue
+        await task_manager.start(task.id)
+        started += 1
+    return {"started": started}
 
 
 @router.post("/stop-all", status_code=200)
@@ -143,6 +194,8 @@ async def import_tasks_csv(
         else:
             for alias in split_pipe(row.get("card_aliases", "")):
                 resolved_card_ids.append(_resolve_unique(card_alias_map, alias, "card_alias", idx))
+        if len(resolved_card_ids) != 1:
+            raise HTTPException(400, f'Invalid task row {idx}: exactly one card is required')
 
         try:
             quantity_raw = row.get("quantity", "")
@@ -174,6 +227,7 @@ async def import_tasks_csv(
             updated_at=now,
             **task_in.model_dump(),
         )
+        await _validate_task_dependencies(db, task)
         await db.execute(
             """INSERT INTO tasks
                (id, name, site, sku, profile_id, card_ids, quantity,
@@ -216,6 +270,7 @@ async def create_task(body: TaskCreate, db: aiosqlite.Connection = Depends(get_d
         updated_at=now,
         **body.model_dump(),
     )
+    await _validate_task_dependencies(db, task)
     await db.execute(
         """INSERT INTO tasks
            (id, name, site, sku, profile_id, card_ids, quantity,
@@ -241,6 +296,7 @@ async def update_task(
     existing = Task.from_row(row)
     updates = body.model_dump(exclude_none=True)
     updated = existing.model_copy(update={**updates, "updated_at": Task.now()})
+    await _validate_task_dependencies(db, updated)
 
     await db.execute(
         """UPDATE tasks SET name=?, sku=?, profile_id=?, card_ids=?, quantity=?,
@@ -272,6 +328,7 @@ async def start_task(task_id: str, db: aiosqlite.Connection = Depends(get_db)):
     task = Task.from_row(row)
     if task.status == TaskStatus.RUNNING:
         raise HTTPException(409, "Task is already running")
+    await _validate_task_dependencies(db, task)
 
     from backend.core.task_manager import task_manager
     await task_manager.start(task_id)

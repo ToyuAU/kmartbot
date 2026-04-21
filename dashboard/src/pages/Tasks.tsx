@@ -189,7 +189,14 @@ export function Tasks() {
         )}
       </div>
 
-      {formOpen && <TaskForm task={editTask} open={formOpen} onOpenChange={setFormOpen} />}
+      {formOpen && (
+        <TaskForm
+          key={editTask?.id ?? 'new-task'}
+          task={editTask}
+          open={formOpen}
+          onOpenChange={setFormOpen}
+        />
+      )}
     </div>
   )
 }
